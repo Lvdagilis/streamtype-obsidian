@@ -1,7 +1,7 @@
 {
   "id": "streamtype",
   "name": "Streamtype",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "minAppVersion": "1.4.0",
   "description": "Write stream-of-consciousness notes one word at a time. Features journal templates, morning pages pacing, book mode, and a built-in writing analysis view.",
   "author": "Lukas Vytautas Dagilis",

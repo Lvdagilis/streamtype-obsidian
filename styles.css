@@ -5,8 +5,9 @@
    ══════════════════════════════════════════════════════════════════ */
 
 /* ── View container ───────────────────────────────────────────────── */
-.streamtype-view > .view-content {
-  padding: 0 !important;
+.workspace-leaf-content[data-type="streamtype-writer"] > .view-content,
+.workspace-leaf-content[data-type="streamtype-insights"] > .view-content {
+  padding: 0;
   overflow: hidden;
 }
 
@@ -65,8 +66,11 @@
 .st-peek-overlay p  { margin: 0.4em 0; }
 .st-peek-overlay strong { color: #e0e0e0; font-weight: 600; }
 .st-peek-overlay em     { font-style: italic; }
-.st-peek-overlay .st-current-word { color: #e8e8e8; border-bottom: 1px solid #555; }
-.st-hidden { display: none !important; }
+.st-peek-overlay .st-current-word { color: #e8e8e8; border-bottom: 1px solid #555555; }
+.st-content .st-hidden,
+.st-insights .st-hidden,
+.st-mode-selector .st-hidden,
+.modal .st-hidden { display: none; }
 
 /* ── Mode indicator (top-centre) ──────────────────────────────────── */
 .st-mode-indicator {
@@ -106,7 +110,7 @@
   gap: 0.4rem;
   margin-left: auto;
   font-size: 0.75rem;
-  color: #666;
+  color: #666666;
   font-family: system-ui, sans-serif;
 }
 .st-book-nav-btn { font-size: 0.85rem; }
@@ -122,7 +126,7 @@
 }
 .st-section-counter {
   font-size: 0.65rem;
-  color: #555;
+  color: #555555;
   letter-spacing: 0.2em;
   text-transform: uppercase;
   margin-bottom: 0.5rem;
@@ -130,7 +134,7 @@
 }
 .st-section-prompt-text {
   font-size: clamp(0.9rem, 2vw, 1.2rem);
-  color: #888;
+  color: #888888;
   font-style: italic;
   line-height: 1.5;
   margin-bottom: 0.8rem;
@@ -157,7 +161,7 @@
 }
 .st-template-prompt {
   font-size: 0.8rem;
-  color: #666;
+  color: #666666;
   letter-spacing: 0.1em;
   text-transform: uppercase;
   font-family: system-ui, sans-serif;
@@ -202,7 +206,7 @@
 .st-sentence-context {
   max-width: 70vw;
   text-align: center;
-  color: #555;
+  color: #555555;
   font-family: inherit;
   font-style: italic;
   line-height: 1.6;
@@ -300,8 +304,8 @@
   color: #5e8e5e;
   margin-bottom: 0.5rem;
 }
-.st-completion h2 { color: #ccc; font-weight: 400; }
-.st-completion p  { color: #666; font-size: 0.9rem; font-family: system-ui, sans-serif; }
+.st-completion h2 { color: #cccccc; font-weight: 400; }
+.st-completion p  { color: #666666; font-size: 0.9rem; font-family: system-ui, sans-serif; }
 
 /* ── Progress bar ─────────────────────────────────────────────────── */
 .st-progress-bar {
@@ -310,7 +314,7 @@
   left: 0;
   height: 2px;
   width: 0;
-  background: #444;
+  background: #444444;
   transition: width 0.4s ease, background 0.4s ease;
   z-index: 10;
 }
@@ -324,7 +328,7 @@
   left: 50%;
   transform: translateX(-50%);
   font-size: 0.68rem;
-  color: #555;
+  color: #555555;
   letter-spacing: 0.12em;
   font-family: system-ui, sans-serif;
   white-space: nowrap;
@@ -341,7 +345,7 @@
   left: 50%;
   transform: translateX(-50%);
   font-size: 0.65rem;
-  color: #555;
+  color: #555555;
   letter-spacing: 0.1em;
   font-family: system-ui, sans-serif;
   white-space: nowrap;
@@ -371,7 +375,7 @@
 }
 .st-goal-label {
   font-size: 0.62rem;
-  color: #444;
+  color: #444444;
   letter-spacing: 0.15em;
   text-transform: uppercase;
   width: 2.8rem;
@@ -393,7 +397,7 @@
 .st-btn {
   background: transparent;
   border: 1px solid #3a3a3a;
-  color: #888;
+  color: #888888;
   font-family: system-ui, sans-serif;
   font-size: 0.72rem;
   padding: 0.2rem 0.45rem;
@@ -404,14 +408,14 @@
   white-space: nowrap;
   box-shadow: none;
 }
-.st-btn:hover { border-color: #5a5a5a; color: #bbb; }
-.st-btn.st-active { border-color: #888; color: #e8e8e8; }
+.st-btn:hover { border-color: #5a5a5a; color: #bbbbbb; }
+.st-btn.st-active { border-color: #888888; color: #e8e8e8; }
 .st-btn.st-primary { border-color: #5e8e5e; color: #5e8e5e; }
 .st-btn.st-primary:hover { border-color: #7ab87a; color: #7ab87a; }
 
 /* Mode tabs in header */
 .st-mode-tab { font-size: 0.68rem; }
-.st-mode-tab.st-active { border-color: #666; color: #ccc; }
+.st-mode-tab.st-active { border-color: #666666; color: #cccccc; }
 
 /* ── Save modal ───────────────────────────────────────────────────── */
 .st-save-modal {
@@ -426,7 +430,7 @@
 
 .st-modal {
   background: #181818;
-  border: 1px solid #333;
+  border: 1px solid #333333;
   border-radius: 6px;
   padding: 1.6rem 1.6rem 1.3rem;
   min-width: 360px;
@@ -438,17 +442,17 @@
 }
 .st-modal-label {
   font-size: 0.7rem;
-  color: #888;
+  color: #888888;
   letter-spacing: 0.15em;
   text-transform: uppercase;
 }
-.st-modal-hint { font-size: 0.7rem; color: #555; }
+.st-modal-hint { font-size: 0.7rem; color: #555555; }
 .st-modal-actions { display: flex; gap: 0.5rem; justify-content: flex-end; margin-top: 0.3rem; }
 
 .st-tags-input {
   background: #0f0f0f;
   border: 1px solid #2e2e2e;
-  color: #ddd;
+  color: #dddddd;
   padding: 0.6rem 0.8rem;
   border-radius: 4px;
   font-family: system-ui, sans-serif;
@@ -484,14 +488,14 @@
   font-size: clamp(1.1rem, 3.5vw, 1.8rem);
   font-weight: 300;
   letter-spacing: 0.3em;
-  color: #777;
+  color: #777777;
   text-transform: lowercase;
   margin-bottom: 0.4rem;
 }
 
 .st-ms-prompt {
   font-size: 0.82rem;
-  color: #555;
+  color: #555555;
   letter-spacing: 0.12em;
   margin-bottom: 2.5rem;
 }
@@ -514,7 +518,7 @@
   text-align: left;
   transition: border-color 0.15s, background 0.15s;
 }
-.st-ms-card:hover { border-color: #222; background: #111; }
+.st-ms-card:hover { border-color: #222222; background: #111111; }
 
 .st-ms-name {
   letter-spacing: 0.18em;
@@ -537,10 +541,10 @@
 }
 .st-ms-primary .st-ms-info {
   font-size: 0.86rem;
-  color: #888;
+  color: #888888;
 }
-.st-ms-primary:hover .st-ms-name { color: #999; }
-.st-ms-primary:hover .st-ms-info { color: #666; }
+.st-ms-primary:hover .st-ms-name { color: #999999; }
+.st-ms-primary:hover .st-ms-info { color: #666666; }
 
 /* ── Secondary (free journal) ─────────────────────────────────────── */
 .st-ms-secondary {
@@ -549,14 +553,14 @@
 }
 .st-ms-secondary .st-ms-name {
   font-size: 0.82rem;
-  color: #aaa;
+  color: #aaaaaa;
 }
 .st-ms-secondary .st-ms-info {
   font-size: 0.79rem;
-  color: #777;
+  color: #777777;
 }
-.st-ms-secondary:hover .st-ms-name { color: #888; }
-.st-ms-secondary:hover .st-ms-info { color: #555; }
+.st-ms-secondary:hover .st-ms-name { color: #888888; }
+.st-ms-secondary:hover .st-ms-info { color: #555555; }
 
 /* ── Tertiary row ─────────────────────────────────────────────────── */
 .st-ms-tertiary-row {
@@ -572,13 +576,13 @@
 }
 .st-ms-tertiary .st-ms-name {
   font-size: 0.72rem;
-  color: #999;
+  color: #999999;
 }
 .st-ms-tertiary .st-ms-info {
   font-size: 0.7rem;
-  color: #666;
+  color: #666666;
 }
-.st-ms-tertiary:hover .st-ms-name { color: #777; }
+.st-ms-tertiary:hover .st-ms-name { color: #777777; }
 .st-ms-tertiary:hover .st-ms-info { color: #4a4a4a; }
 
 /* ── Edit templates link ──────────────────────────────────────────── */
@@ -593,26 +597,26 @@
   cursor: pointer;
   transition: color 0.15s;
 }
-.st-ms-edit-link:hover { color: #666; }
+.st-ms-edit-link:hover { color: #666666; }
 
 /* ── Menu / back button in header ─────────────────────────────────── */
 .st-menu-btn {
   font-size: 1rem;
-  color: #333;
+  color: #333333;
   border-color: transparent;
   padding: 0.1rem 0.5rem;
   margin-right: 0.3rem;
   flex-shrink: 0;
 }
-.st-menu-btn:hover { color: #888; }
+.st-menu-btn:hover { color: #888888; }
 
 /* ══════════════════════════════════════════════════════════════════
    Insights view
    ══════════════════════════════════════════════════════════════════ */
 
 .st-insights {
-  background: #111;
-  color: #ccc;
+  background: #111111;
+  color: #cccccc;
   font-family: system-ui, sans-serif;
   height: 100%;
   overflow-y: auto;
@@ -624,13 +628,13 @@
   align-items: center;
   gap: 1rem;
   margin-bottom: 1.2rem;
-  border-bottom: 1px solid #222;
+  border-bottom: 1px solid #222222;
   padding-bottom: 0.8rem;
 }
 .sti-title {
   font-size: 1.1rem;
   font-weight: 500;
-  color: #ddd;
+  color: #dddddd;
   letter-spacing: 0.05em;
 }
 .sti-rescan { margin-left: auto; }
@@ -638,7 +642,7 @@
 .sti-empty {
   text-align: center;
   padding: 4rem 2rem;
-  color: #555;
+  color: #555555;
   font-size: 0.9rem;
 }
 
@@ -654,25 +658,25 @@
 .sti-filter-btn {
   font-size: 0.68rem;
   padding: 0.25rem 0.65rem;
-  color: #444;
+  color: #444444;
   border-color: transparent;
   letter-spacing: 0.08em;
 }
-.sti-filter-btn:hover { color: #888; border-color: #2a2a2a; }
-.sti-filter-btn.sti-filter-active { color: #ccc; border-color: #333; background: #1a1a1a; }
+.sti-filter-btn:hover { color: #888888; border-color: #2a2a2a; }
+.sti-filter-btn.sti-filter-active { color: #cccccc; border-color: #333333; background: #1a1a1a; }
 
 /* Tabs */
 .sti-tabs {
   display: flex;
   gap: 0.3rem;
   margin-bottom: 1.2rem;
-  border-bottom: 1px solid #222;
+  border-bottom: 1px solid #222222;
   padding-bottom: 0.5rem;
 }
 .sti-tab {
   background: transparent;
   border: none;
-  color: #666;
+  color: #666666;
   font-size: 0.8rem;
   padding: 0.3rem 0.7rem;
   cursor: pointer;
@@ -680,7 +684,7 @@
   letter-spacing: 0.05em;
   box-shadow: none;
 }
-.sti-tab:hover { color: #aaa; }
+.sti-tab:hover { color: #aaaaaa; }
 .sti-tab.sti-tab-active { color: #e8e8e8; background: #1e1e1e; }
 
 .sti-panel { padding-bottom: 2rem; }
@@ -701,12 +705,12 @@
   text-align: center;
 }
 .sti-stat-value { font-size: 1.3rem; color: #e0e0e0; font-weight: 500; }
-.sti-stat-label { font-size: 0.68rem; color: #666; margin-top: 0.2rem; letter-spacing: 0.05em; }
+.sti-stat-label { font-size: 0.68rem; color: #666666; margin-top: 0.2rem; letter-spacing: 0.05em; }
 
 /* Word cloud */
 .sti-section-label {
   font-size: 0.68rem;
-  color: #555;
+  color: #555555;
   letter-spacing: 0.15em;
   text-transform: uppercase;
   margin-bottom: 0.8rem;
@@ -721,7 +725,7 @@
   margin-bottom: 1rem;
 }
 .sti-cloud-word {
-  color: #aaa;
+  color: #aaaaaa;
   cursor: default;
   letter-spacing: 0.03em;
 }
@@ -747,13 +751,13 @@
 }
 .sti-topic-count {
   font-size: 0.7rem;
-  color: #666;
+  color: #666666;
   flex-shrink: 0;
   padding-top: 1px;
 }
 .sti-topic-keywords {
   font-size: 0.85rem;
-  color: #ccc;
+  color: #cccccc;
   letter-spacing: 0.02em;
 }
 
@@ -790,16 +794,16 @@
   border-bottom: 1px solid #1a1a1a;
   font-size: 0.8rem;
 }
-.sti-tl-date { color: #666; white-space: nowrap; min-width: 100px; }
-.sti-tl-words { color: #555; white-space: nowrap; min-width: 55px; }
+.sti-tl-date { color: #666666; white-space: nowrap; min-width: 100px; }
+.sti-tl-words { color: #555555; white-space: nowrap; min-width: 55px; }
 .sti-tl-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
-.sti-tl-topics { color: #999; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sti-tl-topics { color: #999999; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sti-open-btn { font-size: 0.65rem; padding: 0.15rem 0.35rem; flex-shrink: 0; }
 
 /* Ideas */
 .sti-ideas-hint {
   font-size: 0.8rem;
-  color: #555;
+  color: #555555;
   margin-bottom: 1rem;
   line-height: 1.5;
 }
@@ -822,7 +826,7 @@
 }
 .sti-idea-phrase {
   font-size: 0.82rem;
-  color: #aaa;
+  color: #aaaaaa;
   flex: 0 0 auto;
   width: 170px;
   white-space: nowrap;
@@ -834,11 +838,6 @@
    Template editor modal (inside Obsidian Modal)
    ══════════════════════════════════════════════════════════════════ */
 
-/* Force the Obsidian modal shell to be wide enough */
-.modal:has(.st-template-editor) {
-  width: min(820px, 92vw);
-  max-width: min(820px, 92vw);
-}
 
 .st-template-editor {
   max-height: calc(85vh - 100px);
@@ -866,7 +865,7 @@
 }
 .ste-sidebar-label {
   font-size: 0.65rem;
-  color: #666;
+  color: #666666;
   letter-spacing: 0.15em;
   text-transform: uppercase;
   margin-bottom: 0.3rem;
@@ -877,7 +876,7 @@
   padding: 0.3rem 0.5rem;
   border-radius: 3px;
   cursor: pointer;
-  color: #aaa;
+  color: #aaaaaa;
 }
 .ste-template-item:hover { background: #1e1e1e; }
 .ste-template-item.ste-selected { background: #252525; color: #e0e0e0; }
@@ -890,12 +889,12 @@
   gap: 0.5rem;
   flex-wrap: wrap;
 }
-.ste-row label { font-size: 0.72rem; color: #888; min-width: 60px; }
+.ste-row label { font-size: 0.72rem; color: #888888; min-width: 60px; }
 
 .ste-input {
   background: #1a1a1a;
-  border: 1px solid #333;
-  color: #ccc;
+  border: 1px solid #333333;
+  color: #cccccc;
   padding: 0.3rem 0.5rem;
   border-radius: 3px;
   font-size: 0.82rem;
@@ -903,7 +902,7 @@
 }
 .ste-input.ste-wide { flex: 1; }
 .ste-input.ste-short { width: 70px; }
-.ste-input:focus { border-color: #555; }
+.ste-input:focus { border-color: #555555; }
 
 .ste-section {
   background: #191919;
@@ -916,7 +915,7 @@
 }
 .ste-section-label {
   font-size: 0.65rem;
-  color: #666;
+  color: #666666;
   letter-spacing: 0.12em;
   text-transform: uppercase;
   margin-top: 0.3rem;
@@ -925,14 +924,14 @@
 
 .ste-btn {
   background: transparent;
-  border: 1px solid #444;
-  color: #999;
+  border: 1px solid #444444;
+  color: #999999;
   font-size: 0.75rem;
   padding: 0.25rem 0.6rem;
   border-radius: 3px;
   cursor: pointer;
 }
-.ste-btn:hover { border-color: #666; color: #ccc; }
+.ste-btn:hover { border-color: #666666; color: #cccccc; }
 .ste-btn.ste-primary { border-color: #5e8e5e; color: #5e8e5e; }
 .ste-btn.ste-danger { border-color: #5a2a2a; color: #8e5e5e; }
 .ste-btn.ste-danger:hover { border-color: #8a3a3a; color: #bb7777; }

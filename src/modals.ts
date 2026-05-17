@@ -71,6 +71,8 @@ export class TemplateEditorModal extends Modal {
 
   onOpen() {
     this.titleEl.setText("Edit journal templates");
+    this.modalEl.style.width = "min(820px, 92vw)";
+    this.modalEl.style.maxWidth = "min(820px, 92vw)";
     this.render();
   }
 
