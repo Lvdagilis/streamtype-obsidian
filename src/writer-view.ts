@@ -82,6 +82,7 @@ export class StreamtypeView extends ItemView {
   // ── Keyboard cleanup ───────────────────────────────────────────────
   private boundKeydown!: (e: KeyboardEvent) => void;
   private boundKeyup!: (e: KeyboardEvent) => void;
+  private boundCompositionEnd!: (e: CompositionEvent) => void;
 
   constructor(leaf: WorkspaceLeaf, plugin: StreamtypePlugin) {
     super(leaf);
@@ -124,8 +125,9 @@ export class StreamtypeView extends ItemView {
     this.stopTimer();
     this.stopMorningPacers();
 
-    if (this.boundKeydown) this.containerEl.removeEventListener("keydown", this.boundKeydown);
-    if (this.boundKeyup)   this.containerEl.removeEventListener("keyup",   this.boundKeyup);
+    if (this.boundKeydown)        this.containerEl.removeEventListener("keydown",        this.boundKeydown);
+    if (this.boundKeyup)          this.containerEl.removeEventListener("keyup",          this.boundKeyup);
+    if (this.boundCompositionEnd) this.containerEl.removeEventListener("compositionend", this.boundCompositionEnd);
   }
 
   // ── UI construction ────────────────────────────────────────────────
@@ -1202,16 +1204,29 @@ export class StreamtypeView extends ItemView {
   // ── Keyboard ───────────────────────────────────────────────────────
 
   private attachKeyboard() {
-    this.boundKeydown = this.handleKeydown.bind(this);
-    this.boundKeyup   = this.handleKeyup.bind(this);
-    this.containerEl.addEventListener("keydown", this.boundKeydown);
-    this.containerEl.addEventListener("keyup",   this.boundKeyup);
+    this.boundKeydown       = this.handleKeydown.bind(this);
+    this.boundKeyup         = this.handleKeyup.bind(this);
+    this.boundCompositionEnd = this.handleCompositionEnd.bind(this);
+    this.containerEl.addEventListener("keydown",        this.boundKeydown);
+    this.containerEl.addEventListener("keyup",          this.boundKeyup);
+    this.containerEl.addEventListener("compositionend", this.boundCompositionEnd);
     this.containerEl.addEventListener("click", () => {
       if (!this.saveModalOpen) this.containerEl.focus();
     });
   }
 
+  private handleCompositionEnd(e: CompositionEvent) {
+    if (!e.data || this.saveModalOpen) return;
+    if (this.activeMode === "morning-pages" && this.plugin.settings.morningPaceEnabled && this.pendingCommitSep !== null) return;
+    this.hintEl?.addClass("st-hidden");
+    this.startTimerIfNeeded();
+    this.current += e.data;
+    if (!this.fading) this.renderWord();
+    this.updateProgress();
+  }
+
   private handleKeydown(e: KeyboardEvent) {
+    if (e.isComposing) return;
     const target = e.target as HTMLElement;
     if (target.tagName === "INPUT" || target.tagName === "TEXTAREA") return;
     if (this.saveModalOpen) return;
