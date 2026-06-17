@@ -4,6 +4,25 @@
    position:fixed → position:absolute; view container is position:relative.
    ══════════════════════════════════════════════════════════════════ */
 
+/* ── Hidden IME capture field ─────────────────────────────────────── */
+/* Holds focus so dead-key / IME composition fires; visually out of the way. */
+.st-ime-input {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  border: 0;
+  margin: -1px;
+  opacity: 0;
+  background: transparent;
+  color: transparent;
+  caret-color: transparent;
+  pointer-events: none;
+  z-index: -1;
+}
+
 /* ── View container ───────────────────────────────────────────────── */
 .workspace-leaf-content[data-type="streamtype-writer"] > .view-content,
 .workspace-leaf-content[data-type="streamtype-insights"] > .view-content {

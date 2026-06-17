@@ -78,6 +78,9 @@ export class StreamtypeView extends ItemView {
   private completionEl!: HTMLElement;
   private bookNavEl!: HTMLElement;
   private modeSelectorEl!: HTMLElement;
+  // Hidden text field that owns focus so dead-key / IME composition fires
+  // reliably (composition events don't fire on a non-editable container).
+  private imeInput!: HTMLInputElement;
 
   // ── Keyboard cleanup ───────────────────────────────────────────────
   private boundKeydown!: (e: KeyboardEvent) => void;
@@ -109,7 +112,7 @@ export class StreamtypeView extends ItemView {
 
     this.attachKeyboard();
     this.containerEl.setAttribute("tabindex", "0");
-    this.containerEl.focus();
+    this.imeInput.focus();
 
     // Show mode selector unless the user has opted to skip it
     const { skipModeSelector, defaultMode } = this.plugin.settings;
@@ -125,9 +128,9 @@ export class StreamtypeView extends ItemView {
     this.stopTimer();
     this.stopMorningPacers();
 
-    if (this.boundKeydown)        this.containerEl.removeEventListener("keydown",        this.boundKeydown);
-    if (this.boundKeyup)          this.containerEl.removeEventListener("keyup",          this.boundKeyup);
-    if (this.boundCompositionEnd) this.containerEl.removeEventListener("compositionend", this.boundCompositionEnd);
+    if (this.boundKeydown)        this.imeInput?.removeEventListener("keydown",        this.boundKeydown);
+    if (this.boundKeyup)          this.imeInput?.removeEventListener("keyup",          this.boundKeyup);
+    if (this.boundCompositionEnd) this.imeInput?.removeEventListener("compositionend", this.boundCompositionEnd);
   }
 
   // ── UI construction ────────────────────────────────────────────────
@@ -152,6 +155,14 @@ export class StreamtypeView extends ItemView {
     this.paceIndicatorEl = c.createEl("div", { cls: "st-pace-indicator st-hidden" });
 
     this.modeSelectorEl = c.createEl("div", { cls: "st-mode-selector" });
+
+    // Off-screen capture field — keeps focus so dead keys / IME compose here.
+    this.imeInput = c.createEl("input", { cls: "st-ime-input" });
+    this.imeInput.setAttribute("type", "text");
+    this.imeInput.setAttribute("autocomplete", "off");
+    this.imeInput.setAttribute("autocapitalize", "off");
+    this.imeInput.setAttribute("spellcheck", "false");
+    this.imeInput.setAttribute("aria-hidden", "true");
 
     this.buildHeader();
     this.buildControlsLeft();
@@ -1043,7 +1054,7 @@ export class StreamtypeView extends ItemView {
   private closeSaveDialog() {
     this.saveModalOpen = false;
     this.saveModal.addClass("st-hidden");
-    this.containerEl.focus();
+    this.imeInput.focus();
   }
 
   private async confirmSave() {
@@ -1207,29 +1218,35 @@ export class StreamtypeView extends ItemView {
     this.boundKeydown       = this.handleKeydown.bind(this);
     this.boundKeyup         = this.handleKeyup.bind(this);
     this.boundCompositionEnd = this.handleCompositionEnd.bind(this);
-    this.containerEl.addEventListener("keydown",        this.boundKeydown);
-    this.containerEl.addEventListener("keyup",          this.boundKeyup);
-    this.containerEl.addEventListener("compositionend", this.boundCompositionEnd);
+    this.imeInput.addEventListener("keydown",        this.boundKeydown);
+    this.imeInput.addEventListener("keyup",          this.boundKeyup);
+    this.imeInput.addEventListener("compositionend", this.boundCompositionEnd);
     this.containerEl.addEventListener("click", () => {
-      if (!this.saveModalOpen) this.containerEl.focus();
+      if (!this.saveModalOpen) this.imeInput.focus();
     });
   }
 
   private handleCompositionEnd(e: CompositionEvent) {
-    if (!e.data || this.saveModalOpen) return;
+    const data = e.data;
+    // Whatever happens, never let composed text linger in the capture field.
+    this.imeInput.value = "";
+    if (!data || this.saveModalOpen) return;
+    // Block new characters while waiting for a pacing token — prevents merged words
     if (this.activeMode === "morning-pages" && this.plugin.settings.morningPaceEnabled && this.pendingCommitSep !== null) return;
     this.hintEl?.addClass("st-hidden");
     this.startTimerIfNeeded();
-    this.current += e.data;
+    this.current += data;
     if (!this.fading) this.renderWord();
     this.updateProgress();
   }
 
   private handleKeydown(e: KeyboardEvent) {
+    // Mid-composition (dead key in progress): let the browser compose; the
+    // resulting character arrives via handleCompositionEnd.
     if (e.isComposing) return;
-    const target = e.target as HTMLElement;
-    if (target.tagName === "INPUT" || target.tagName === "TEXTAREA") return;
     if (this.saveModalOpen) return;
+    // Keep the capture field empty so no committed prose ever lingers in it.
+    this.imeInput.value = "";
 
     const mod = e.metaKey || e.ctrlKey;
 
@@ -1275,6 +1292,8 @@ export class StreamtypeView extends ItemView {
     }
 
     if (e.key.length === 1 && !mod) {
+      // Prevent the key from landing in the hidden capture field.
+      e.preventDefault();
       // Block new characters while waiting for a pacing token — prevents merged words
       if (this.activeMode === "morning-pages" && this.plugin.settings.morningPaceEnabled && this.pendingCommitSep !== null) return;
       e.stopPropagation();
