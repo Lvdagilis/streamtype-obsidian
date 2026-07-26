@@ -36,6 +36,8 @@ export interface StreamtypeSettings {
   morningPagesWordsPerMinute: number; // target sustained rate
   morningPagesBurstSize: number;      // words you can spend before the rate limit bites
   metronomeBpm: number;
+  autosaveEnabled: boolean;           // continuously write the live note to disk as you type
+  autosaveIntervalSeconds: number;    // how often the note is flushed to disk
 }
 
 export const DEFAULT_SETTINGS: StreamtypeSettings = {
@@ -77,6 +79,8 @@ export const DEFAULT_SETTINGS: StreamtypeSettings = {
   morningPagesWordsPerMinute: 25,
   morningPagesBurstSize: 6,
   metronomeBpm: 60,
+  autosaveEnabled: true,
+  autosaveIntervalSeconds: 3,
 };
 
 export class StreamtypeSettingTab extends PluginSettingTab {
@@ -140,6 +144,36 @@ export class StreamtypeSettingTab extends PluginSettingTab {
     folderSetting("Stream folder", "streamFolder");
     folderSetting("Morning Pages folder", "morningPagesFolder");
     folderSetting("Book projects folder", "bookFolder");
+
+    // ── Autosave ──────────────────────────────────────────────────────
+    containerEl.createEl("h3", { text: "Autosave" });
+    containerEl.createEl("p", {
+      cls: "setting-item-description",
+      text: "Creates the destination note the moment you start typing and keeps saving into it as you write — just like a normal Obsidian note. The 'save' button (and ⌘S) is optional: it only attaches tags and finishes the session. Nothing is lost if Obsidian closes before you save.",
+    });
+
+    new Setting(containerEl)
+      .setName("Enable autosave")
+      .setDesc("Write the note to disk continuously as you type.")
+      .addToggle((t) =>
+        t.setValue(this.plugin.settings.autosaveEnabled).onChange(async (v) => {
+          this.plugin.settings.autosaveEnabled = v;
+          await this.plugin.saveSettings();
+        })
+      );
+
+    new Setting(containerEl)
+      .setName("Autosave interval (seconds)")
+      .setDesc("How often the note is flushed to disk while typing. Minimum 1.")
+      .addText((t) =>
+        t
+          .setPlaceholder("3")
+          .setValue(String(this.plugin.settings.autosaveIntervalSeconds))
+          .onChange(async (v) => {
+            this.plugin.settings.autosaveIntervalSeconds = Math.max(1, parseInt(v) || 3);
+            await this.plugin.saveSettings();
+          })
+      );
 
     // ── Display defaults ──────────────────────────────────────────────
     containerEl.createEl("h3", { text: "Display defaults" });

@@ -21,6 +21,25 @@ export async function createFile(app: App, path: string, content: string): Promi
   return app.vault.create(normalized, content);
 }
 
+// Create the file, or overwrite it in place if it already exists.
+export async function writeFile(app: App, path: string, content: string): Promise<TFile> {
+  const normalized = normalizePath(path);
+  const file = app.vault.getAbstractFileByPath(normalized);
+  if (file instanceof TFile) {
+    await app.vault.modify(file, content);
+    return file;
+  }
+  return app.vault.create(normalized, content);
+}
+
+export async function deleteFileIfExists(app: App, path: string): Promise<void> {
+  const normalized = normalizePath(path);
+  const file = app.vault.getAbstractFileByPath(normalized);
+  if (file instanceof TFile) {
+    await app.vault.delete(file);
+  }
+}
+
 export function fileExists(app: App, path: string): boolean {
   return app.vault.getAbstractFileByPath(normalizePath(path)) instanceof TFile;
 }

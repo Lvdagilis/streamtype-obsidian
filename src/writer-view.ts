@@ -4,11 +4,28 @@ import type { WritingMode, FontSize, DisplayMode, JournalTemplate } from "./sett
 import {
   ensureFolder, appendToFile, createFile, fileExists,
   buildFrontmatter, todayString, countWordsInMarkdown,
-  getFolderFiles,
+  getFolderFiles, writeFile, deleteFileIfExists,
 } from "./vault-helpers";
 import { renderSectionPrompt } from "./templates";
 
 export const WRITER_VIEW_TYPE = "streamtype-view";
+
+// A writing session's full state, stashed when switching modes so returning to
+// a mode resumes the same live note instead of starting a new one.
+interface CachedSession {
+  fullText: string;
+  current: string;
+  sessionPath: string;
+  continuePrefix: string | null;
+  title: string;
+  createdISO: string;
+  tags: string[];
+  templateId: string | null;
+  sectionIndex: number;
+  sectionSessions: string[];
+  bookProject: string;
+  bookChapter: string;
+}
 
 export class StreamtypeView extends ItemView {
   plugin: StreamtypePlugin;
@@ -51,11 +68,30 @@ export class StreamtypeView extends ItemView {
   private tokenCheckHandle: number | null = null;  // interval polling for token
   private metronomeHandle: number | null = null;
 
-  // ── Per-mode draft cache (persists across mode switches within a session) ──
-  private modeStateCache = new Map<WritingMode, { fullText: string; current: string }>();
+  // ── Per-mode session cache (resumes the live note across mode switches) ──
+  private modeStateCache = new Map<WritingMode, CachedSession>();
 
   // ── Save modal open flag ───────────────────────────────────────────
   private saveModalOpen = false;
+
+  // ── Live session (writes continuously to a real note) ───────────────
+  // The destination note is created on the first keystroke and rewritten in
+  // place as you type — no separate "save" step is needed to persist content.
+  private sessionFile: TFile | null = null;
+  // For modes that continue an existing file (a morning-pages day file, a book
+  // chapter): everything already in that file plus our separator. null means
+  // this session owns a brand-new note whose header we build from tags/title.
+  private sessionContinuePrefix: string | null = null;
+  private sessionTitle = "";
+  private sessionCreatedISO = "";
+  private sessionTags: string[] = [];
+
+  // ── Autosave ───────────────────────────────────────────────────────
+  private autosaveTimer: number | null = null;
+  // Snapshot of the last state written to disk, so we only rewrite on change.
+  private lastAutosaveSnapshot: string | null = null;
+  // Guards against a slow flush overlapping the next timer tick.
+  private autosaveInFlight = false;
 
   // ── DOM refs ───────────────────────────────────────────────────────
   private wordEl!: HTMLElement;
@@ -122,11 +158,16 @@ export class StreamtypeView extends ItemView {
     } else {
       this.showModeSelector();
     }
+
+    this.startAutosave();
   }
 
   async onClose() {
     this.stopTimer();
     this.stopMorningPacers();
+    this.stopAutosave();
+    // Best-effort final flush so the very last words survive a normal close.
+    try { await this.flushAutosave(); } catch { /* vault may be tearing down */ }
 
     if (this.boundKeydown)        this.imeInput?.removeEventListener("keydown",        this.boundKeydown);
     if (this.boundKeyup)          this.imeInput?.removeEventListener("keyup",          this.boundKeyup);
@@ -309,18 +350,23 @@ export class StreamtypeView extends ItemView {
 
   // ── Mode switching ─────────────────────────────────────────────────
 
-  async switchMode(mode: WritingMode) {
-    // Stash current draft before switching so the user can come back to it
-    if (this.fullText || this.current) {
-      this.modeStateCache.set(this.activeMode, {
-        fullText: this.fullText,
-        current: this.current,
-      });
-    }
+  async switchMode(mode: WritingMode, fresh = false) {
+    // The current session is already saved to disk continuously; stash its full
+    // state so returning to this mode resumes the same note. `fresh` means we're
+    // deliberately starting over in the target mode (e.g. from the start screen).
+    await this.flushAutosave();
+    this.cacheCurrentSession();
+    if (fresh) this.modeStateCache.delete(mode);
 
     this.activeMode = mode;
     this.modeSelectorEl.addClass("st-hidden");
     this.resetWritingState();
+    this.clearSession();
+    // resetWritingState leaves template state alone (needed mid-template); clear
+    // it here so a template journal can't leak onto the mode we're switching to.
+    this.activeTemplate = null;
+    this.sectionSessions = [];
+    this.sectionIndex = 0;
     this.stopTimer();
     this.stopMorningPacers();
 
@@ -331,18 +377,60 @@ export class StreamtypeView extends ItemView {
 
     await this.loadForMode(mode);
 
-    // Restore cached draft if available (and the load didn't populate content itself)
+    // Resume a cached session if we have one and the load didn't populate content.
     const cached = this.modeStateCache.get(mode);
-    if (cached && !this.fullText && !this.current) {
-      this.fullText = cached.fullText;
-      this.current = cached.current;
-      this.renderWord();
-      this.renderSentenceContext();
-      // Book paragraph context is set from the file; don't overwrite it here
-      if (mode !== "book") this.updateBlurBg();
-      this.updateProgress();
-      if (this.fullText || this.current) this.hintEl?.addClass("st-hidden");
+    if (cached && !this.fullText && !this.current && this.sectionSessions.length === 0) {
+      this.restoreSession(cached);
     }
+
+    // Re-baseline the autosave snapshot so switching modes doesn't spuriously
+    // rewrite an unchanged note.
+    this.lastAutosaveSnapshot = this.autosaveSnapshot();
+  }
+
+  // Snapshot the current live session into the per-mode cache.
+  private cacheCurrentSession() {
+    if (!this.sessionFile && !this.fullText && !this.current && this.sectionSessions.length === 0) {
+      this.modeStateCache.delete(this.activeMode);
+      return;
+    }
+    this.modeStateCache.set(this.activeMode, {
+      fullText: this.fullText,
+      current: this.current,
+      sessionPath: this.sessionFile?.path ?? "",
+      continuePrefix: this.sessionContinuePrefix,
+      title: this.sessionTitle,
+      createdISO: this.sessionCreatedISO,
+      tags: this.sessionTags,
+      templateId: this.activeTemplate?.id ?? null,
+      sectionIndex: this.sectionIndex,
+      sectionSessions: this.sectionSessions,
+      bookProject: this.bookProject,
+      bookChapter: this.bookChapter,
+    });
+  }
+
+  private restoreSession(c: CachedSession) {
+    this.fullText = c.fullText;
+    this.current = c.current;
+    this.sessionContinuePrefix = c.continuePrefix;
+    this.sessionTitle = c.title;
+    this.sessionCreatedISO = c.createdISO;
+    this.sessionTags = c.tags;
+    this.sectionIndex = c.sectionIndex;
+    this.sectionSessions = c.sectionSessions;
+    const file = c.sessionPath ? this.app.vault.getAbstractFileByPath(c.sessionPath) : null;
+    this.sessionFile = file instanceof TFile ? file : null;
+    if (c.templateId) {
+      const tpl = this.plugin.settings.templates.find((t) => t.id === c.templateId);
+      if (tpl) { this.activeTemplate = tpl; this.showSectionPrompt(); }
+    }
+    this.renderWord();
+    this.renderSentenceContext();
+    if (this.activeMode === "book") this.updateParagraphContext(this.fullText);
+    else this.updateBlurBg();
+    this.updateProgress();
+    if (this.fullText || this.current) this.hintEl?.addClass("st-hidden");
   }
 
   private updateModeTabs() {
@@ -470,11 +558,12 @@ export class StreamtypeView extends ItemView {
     const idx = this.bookChapterList.indexOf(this.bookChapter);
     const next = idx + delta;
     if (next < 0 || next >= this.bookChapterList.length) return;
-    // Save current content first
-    if (this.fullText.trim() || this.current.trim()) {
-      await this.saveBook();
-    }
+    // The current chapter is already saved continuously; just end its session
+    // so the next keystroke opens a fresh one against the new chapter file.
+    await this.flushAutosave();
+    this.clearSession();
     await this.loadBookChapter(this.bookChapterList[next]);
+    this.lastAutosaveSnapshot = this.autosaveSnapshot();
   }
 
   // ── Mode selector (start screen) ──────────────────────────────────
@@ -489,23 +578,35 @@ export class StreamtypeView extends ItemView {
 
     const options = el.createEl("div", { cls: "st-ms-options" });
 
-    const enterJournal = (tpl: typeof this.plugin.settings.templates[number] | null) => {
-      el.addClass("st-hidden");
+    const enterJournal = async (tpl: typeof this.plugin.settings.templates[number] | null) => {
+      // Stash the outgoing session, then start a fresh journal note.
+      await this.flushAutosave();
+      this.cacheCurrentSession();
       this.activeMode = "journal";
+      this.modeStateCache.delete("journal");
+      this.clearSession();
+      this.resetWritingState();
+      this.activeTemplate = null;
+      this.sectionSessions = [];
+      this.sectionIndex = 0;
+      this.stopTimer();
+      this.stopMorningPacers();
+
+      el.addClass("st-hidden");
       this.updateModeTabs();
       this.bookNavEl.addClass("st-hidden");
       this.controlsLeftEl.removeClass("st-stream-hidden");
+      this.completionEl.addClass("st-hidden");
+      this.templatePickerEl.addClass("st-hidden");
+      this.paragraphContextEl.addClass("st-hidden");
       if (this.plugin.settings.defaultWordGoal > 0) this.setWordGoal(this.plugin.settings.defaultWordGoal);
       if (this.plugin.settings.defaultTimerGoal > 0) this.setTimerGoal(this.plugin.settings.defaultTimerGoal);
       if (tpl) {
         this.startTemplate(tpl);
       } else {
-        this.resetWritingState();
-        this.completionEl.addClass("st-hidden");
-        this.templatePickerEl.addClass("st-hidden");
         this.sectionPromptEl.addClass("st-hidden");
-        this.paragraphContextEl.addClass("st-hidden");
       }
+      this.lastAutosaveSnapshot = this.autosaveSnapshot();
     };
 
     // ── Primary: Stream ──────────────────────────────────────────────
@@ -513,7 +614,7 @@ export class StreamtypeView extends ItemView {
     streamCard.createEl("div", { cls: "st-ms-name", text: "stream" });
     streamCard.createEl("div", { cls: "st-ms-info", text: "unfiltered, uninterrupted writing — no prompts, just flow" });
     streamCard.addEventListener("mousedown", (e) => e.preventDefault());
-    streamCard.addEventListener("click", () => this.switchMode("stream"));
+    streamCard.addEventListener("click", () => this.switchMode("stream", true));
 
     // ── Secondary: Free journal ──────────────────────────────────────
     const journalCard = options.createEl("button", { cls: "st-ms-card st-ms-secondary" });
@@ -540,13 +641,13 @@ export class StreamtypeView extends ItemView {
     mpCard.createEl("div", { cls: "st-ms-name", text: "morning pages" });
     mpCard.createEl("div", { cls: "st-ms-info", text: "750 words at a steady pace" });
     mpCard.addEventListener("mousedown", (e) => e.preventDefault());
-    mpCard.addEventListener("click", () => this.switchMode("morning-pages"));
+    mpCard.addEventListener("click", () => this.switchMode("morning-pages", true));
 
     const bookCard = otherRow.createEl("button", { cls: "st-ms-card st-ms-tertiary" });
     bookCard.createEl("div", { cls: "st-ms-name", text: "book" });
     bookCard.createEl("div", { cls: "st-ms-info", text: "chapters with paragraph context" });
     bookCard.addEventListener("mousedown", (e) => e.preventDefault());
-    bookCard.addEventListener("click", () => this.switchMode("book"));
+    bookCard.addEventListener("click", () => this.switchMode("book", true));
 
     // Edit templates — subtle link below everything
     const editLink = options.createEl("button", { cls: "st-ms-edit-link", text: "edit journal templates" });
@@ -1007,8 +1108,18 @@ export class StreamtypeView extends ItemView {
 
   private checkGoalCompletion() {
     if (this.activeMode === "morning-pages" && this.wordGoal === 750 && this.wordCount() >= 750) {
-      this.showCompletionScreen(this.wordCount(), this.morningPagesPath());
+      void this.completeMorningPages();
     }
+  }
+
+  // Morning pages hit 750 words: flush the note, end the session, and celebrate.
+  private async completeMorningPages() {
+    const wc = this.wordCount();
+    await this.flushAutosave();
+    const path = this.sessionFile?.path ?? this.morningPagesPath();
+    this.clearSession();
+    this.resetWritingState();
+    this.showCompletionScreen(wc, path);
   }
 
   // ── Display mode helpers ───────────────────────────────────────────
@@ -1063,121 +1174,234 @@ export class StreamtypeView extends ItemView {
       .map((t) => t.trim())
       .filter(Boolean);
     this.closeSaveDialog();
-    await this.save(tags);
+    await this.finishSession(tags);
   }
 
-  // ── Save dispatcher ────────────────────────────────────────────────
+  // ── Live session composition ───────────────────────────────────────
 
-  private async save(tags: string[]) {
-    if (this.activeMode === "journal") await this.saveJournal(tags);
-    else if (this.activeMode === "stream") await this.saveStream(tags);
-    else if (this.activeMode === "morning-pages") await this.saveMorningPages();
-    else if (this.activeMode === "book") await this.saveBook();
-  }
-
-  private async saveJournal(tags: string[]) {
-    const now = new Date();
-    const today = todayString();
-    const time = now.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
-    const timeSlug = time.replace(":", "-");
-    const folder = this.plugin.settings.journalFolder;
-
-    await ensureFolder(this.app, folder);
-
-    // Build body — section-based or freeform
-    let body: string;
-    let sessionTitle: string;
-    if (this.activeTemplate && this.sectionSessions.length > 0) {
-      sessionTitle = this.activeTemplate.name;
-      body = this.activeTemplate.sections
-        .map((s, i) => `## ${s.prompt}\n\n${this.sectionSessions[i] ?? ""}`)
+  // Compose the prose body from the current buffer + session context.
+  private renderBody(): string {
+    if (this.activeMode === "journal" && this.activeTemplate) {
+      return this.activeTemplate.sections
+        .map((s, i) => {
+          const content = i < this.sectionIndex ? (this.sectionSessions[i] ?? "")
+            : i === this.sectionIndex ? (this.fullText + this.current)
+            : "";
+          return `## ${s.prompt}\n\n${content}`;
+        })
         .join("\n\n");
-    } else {
-      sessionTitle = "Journal";
-      body = this.fullText + this.current;
+    }
+    return this.fullText + this.current;
+  }
+
+  // Header for a brand-new note (frontmatter + any title block). Rebuilt on each
+  // write so tags added later via the save dialog are picked up.
+  private buildSessionHeader(): string {
+    const created = this.sessionCreatedISO || new Date().toISOString();
+    if (this.activeMode === "stream") {
+      return buildFrontmatter({ created, tags: this.sessionTags });
+    }
+    if (this.activeMode === "journal") {
+      const d = new Date(created);
+      const time = d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
+      const fm = buildFrontmatter({ created, type: "journal", tags: this.sessionTags });
+      return `${fm}# ${this.sessionTitle || "Journal"}\n\n*${todayString()} · ${time}*\n\n`;
+    }
+    if (this.activeMode === "morning-pages") {
+      const fm = buildFrontmatter({ created, type: "morning-pages", tags: ["morning-pages"] });
+      return `${fm}# Morning Pages — ${todayString()}\n\n`;
+    }
+    // book
+    const chapter = this.bookChapter || "Chapter-01.md";
+    return buildFrontmatter({ project: this.bookProject, chapter: chapter.replace(/\.md$/, "") });
+  }
+
+  private composeSessionContent(): string {
+    if (this.sessionContinuePrefix !== null) return this.sessionContinuePrefix + this.renderBody();
+    return this.buildSessionHeader() + this.renderBody();
+  }
+
+  // Resolve where this session's note lives and create it. Called on the first
+  // keystroke (via the autosave flush) so no empty notes are ever left behind.
+  private async ensureSessionStarted() {
+    if (this.sessionFile) return;
+    const now = new Date();
+    this.sessionCreatedISO = now.toISOString();
+    this.sessionContinuePrefix = null;
+
+    let path: string;
+    if (this.activeMode === "stream") {
+      const folder = this.plugin.settings.streamFolder;
+      await ensureFolder(this.app, folder);
+      const slug = now.toISOString().replace(/[:.]/g, "-").slice(0, 19);
+      path = `${folder}stream-${slug}.md`;
+    } else if (this.activeMode === "journal") {
+      const folder = this.plugin.settings.journalFolder;
+      await ensureFolder(this.app, folder);
+      const timeSlug = now.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" }).replace(":", "-");
+      this.sessionTitle = this.activeTemplate ? this.activeTemplate.name : "Journal";
+      path = `${folder}${todayString()} ${timeSlug}.md`;
+    } else if (this.activeMode === "morning-pages") {
+      const folder = this.plugin.settings.morningPagesFolder;
+      await ensureFolder(this.app, folder);
+      path = this.morningPagesPath();
+      const existingFile = this.app.vault.getAbstractFileByPath(normalizePath(path));
+      if (existingFile instanceof TFile) {
+        const existing = await this.app.vault.read(existingFile);
+        const time = now.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
+        this.sessionContinuePrefix = existing.replace(/\s+$/, "") + `\n\n---\n\n## ${time}\n\n`;
+      }
+    } else { // book
+      if (!this.bookProject) return; // can't create a chapter note without a project
+      const folder = `${this.plugin.settings.bookFolder}${this.bookProject}/chapters/`;
+      await ensureFolder(this.app, folder);
+      const chapter = this.bookChapter || "Chapter-01.md";
+      this.bookChapter = chapter;
+      path = this.bookChapterPath(chapter);
+      const existingFile = this.app.vault.getAbstractFileByPath(normalizePath(path));
+      if (existingFile instanceof TFile) {
+        const existing = await this.app.vault.read(existingFile);
+        this.sessionContinuePrefix = existing.replace(/\s+$/, "") + "\n\n";
+      }
+      if (!this.bookChapterList.includes(chapter)) {
+        this.bookChapterList.push(chapter);
+        this.bookChapterList.sort();
+      }
     }
 
-    // Each session is its own note: YYYY-MM-DD HH-MM.md
-    const sessionName = `${today} ${timeSlug}`;
-    const sessionPath = normalizePath(`${folder}${sessionName}.md`);
-    const fm = buildFrontmatter({ created: now.toISOString(), type: "journal", tags });
-    await createFile(this.app, sessionPath, `${fm}# ${sessionTitle}\n\n*${today} · ${time}*\n\n${body}`);
+    this.sessionFile = await writeFile(this.app, path, this.composeSessionContent());
 
-    // Master daily index: YYYY-MM-DD.md  — links to every session
+    // Journal: link the new note from the daily index as soon as it exists.
+    if (this.activeMode === "journal") await this.addJournalIndexEntry();
+  }
+
+  private async addJournalIndexEntry() {
+    if (!this.sessionFile) return;
+    const folder = this.plugin.settings.journalFolder;
+    const today = todayString();
     const masterPath = normalizePath(`${folder}${today}.md`);
+    const link = `- [[${this.sessionFile.basename}]]\n`;
     if (!fileExists(this.app, masterPath)) {
-      const masterFm = buildFrontmatter({ created: now.toISOString(), type: "journal-index" });
-      await createFile(this.app, masterPath, `${masterFm}# ${today}\n\n- [[${sessionName}]]\n`);
+      const masterFm = buildFrontmatter({ created: new Date().toISOString(), type: "journal-index" });
+      await createFile(this.app, masterPath, `${masterFm}# ${today}\n\n${link}`);
     } else {
-      await appendToFile(this.app, masterPath, `- [[${sessionName}]]\n`);
+      await appendToFile(this.app, masterPath, link);
     }
+  }
 
-    new Notice(`Saved → ${sessionName}.md`);
+  // Optional finalize: attach tags to the (already-saved) note, then end the
+  // session so the next keystroke begins a fresh one.
+  private async finishSession(tags: string[]) {
+    this.sessionTags = tags;
+    // Let any in-flight periodic write finish, then force one more so the tags
+    // (and any last word) are guaranteed to land.
+    while (this.autosaveInFlight) await new Promise((r) => window.setTimeout(r, 20));
+    this.lastAutosaveSnapshot = null;
+    await this.flushAutosave();
+
+    const name = this.sessionFile?.basename;
+    if (name) new Notice(`Saved → ${name}.md`);
+
+    this.clearSession();
     this.resetWritingState();
     this.activeTemplate = null;
     this.sectionSessions = [];
+    this.sectionIndex = 0;
+    // A finished session should not be resumed on a later mode switch.
+    this.modeStateCache.delete(this.activeMode);
   }
 
-  private async saveStream(tags: string[]) {
-    const now = new Date();
-    const slug = now.toISOString().replace(/[:.]/g, "-").slice(0, 19);
-    const folder = this.plugin.settings.streamFolder;
-    const path = `${folder}stream-${slug}.md`;
-
-    await ensureFolder(this.app, folder);
-
-    const fm = buildFrontmatter({ created: now.toISOString(), tags });
-    await createFile(this.app, path, fm + this.fullText + this.current);
-    new Notice(`Saved to ${path}`);
-    this.resetWritingState();
+  private clearSession() {
+    this.sessionFile = null;
+    this.sessionContinuePrefix = null;
+    this.sessionTitle = "";
+    this.sessionCreatedISO = "";
+    this.sessionTags = [];
+    this.lastAutosaveSnapshot = null;
   }
 
-  private async saveMorningPages() {
-    const today = todayString();
-    const folder = this.plugin.settings.morningPagesFolder;
-    const path = this.morningPagesPath();
+  // ── Autosave ───────────────────────────────────────────────────────
+  //
+  // The live note is written continuously as you type. The interval timer does
+  // the ongoing saves; `kickAutosave` creates the note immediately on the first
+  // keystroke so it never lags behind by a whole interval.
 
-    await ensureFolder(this.app, folder);
-
-    const body = this.fullText + this.current;
-    if (!fileExists(this.app, path)) {
-      const fm = buildFrontmatter({ created: new Date().toISOString(), type: "morning-pages", tags: ["morning-pages"] });
-      await createFile(this.app, path, `${fm}# Morning Pages — ${today}\n\n${body}`);
-    } else {
-      const time = new Date().toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
-      await appendToFile(this.app, path, `\n\n---\n\n## ${time}\n\n${body}`);
-    }
-
-    new Notice("Morning pages saved.");
-    this.resetWritingState();
+  // Captures everything that affects the on-disk note, to skip no-op writes.
+  private autosaveSnapshot(): string {
+    return JSON.stringify({
+      p: this.sessionFile?.path ?? "",
+      pre: this.sessionContinuePrefix,
+      t: this.sessionTitle,
+      tags: this.sessionTags,
+      m: this.activeMode,
+      f: this.fullText,
+      c: this.current,
+      bp: this.bookProject,
+      bc: this.bookChapter,
+      ti: this.activeTemplate?.id ?? null,
+      si: this.sectionIndex,
+      ss: this.sectionSessions,
+    });
   }
 
-  private async saveBook() {
-    if (!this.bookProject) {
-      new Notice("No book project selected. Please choose a project first.");
-      this.plugin.openBookPicker();
-      return;
+  private hasContent(): boolean {
+    return this.fullText.trim() !== "" || this.current.trim() !== ""
+      || this.sectionSessions.length > 0;
+  }
+
+  private startAutosave() {
+    this.stopAutosave();
+    if (!this.plugin.settings.autosaveEnabled) return;
+    const ms = Math.max(1000, (this.plugin.settings.autosaveIntervalSeconds || 3) * 1000);
+    this.autosaveTimer = window.setInterval(() => { void this.flushAutosave(); }, ms);
+  }
+
+  private stopAutosave() {
+    if (this.autosaveTimer !== null) {
+      window.clearInterval(this.autosaveTimer);
+      this.autosaveTimer = null;
     }
-    const chapter = this.bookChapter || "Chapter-01.md";
-    const folder = `${this.plugin.settings.bookFolder}${this.bookProject}/chapters/`;
-    const path = this.bookChapterPath(chapter);
+  }
 
-    await ensureFolder(this.app, folder);
+  // Create the note promptly on the first keystroke; the interval handles the rest.
+  private kickAutosave() {
+    if (!this.plugin.settings.autosaveEnabled) return;
+    if (this.sessionFile || this.autosaveInFlight) return;
+    if (!this.hasContent()) return;
+    void this.flushAutosave();
+  }
 
-    const body = this.fullText + this.current;
-    if (!fileExists(this.app, path)) {
-      const fm = buildFrontmatter({ project: this.bookProject, chapter: chapter.replace(/\.md$/, "") });
-      await createFile(this.app, path, fm + body);
-    } else {
-      await appendToFile(this.app, path, "\n\n" + body);
-    }
+  // Write the live note if anything changed since the last flush. Creates the
+  // note on first content; removes a brand-new note again if it's emptied out.
+  private async flushAutosave() {
+    if (!this.plugin.settings.autosaveEnabled || this.autosaveInFlight) return;
+    const snap = this.autosaveSnapshot();
+    if (snap === this.lastAutosaveSnapshot) return;
 
-    new Notice(`Saved to ${chapter}`);
-    this.resetWritingState();
-    // Add to chapter list if new
-    if (!this.bookChapterList.includes(chapter)) {
-      this.bookChapterList.push(chapter);
-      this.bookChapterList.sort();
+    this.autosaveInFlight = true;
+    try {
+      if (!this.hasContent()) {
+        // Buffer emptied — discard a brand-new note we created (never a
+        // continued file, which holds earlier sessions' content).
+        if (this.sessionFile && this.sessionContinuePrefix === null) {
+          await deleteFileIfExists(this.app, this.sessionFile.path);
+          this.sessionFile = null;
+        }
+        this.lastAutosaveSnapshot = this.autosaveSnapshot();
+        return;
+      }
+      const live = this.sessionFile
+        && this.app.vault.getAbstractFileByPath(this.sessionFile.path) instanceof TFile;
+      if (!this.sessionFile || !live) {
+        // No note yet, or it was deleted/renamed out from under us — (re)create.
+        this.sessionFile = null;
+        await this.ensureSessionStarted();
+      } else {
+        await this.app.vault.modify(this.sessionFile, this.composeSessionContent());
+      }
+      this.lastAutosaveSnapshot = this.autosaveSnapshot();
+    } finally {
+      this.autosaveInFlight = false;
     }
   }
 
@@ -1238,6 +1462,7 @@ export class StreamtypeView extends ItemView {
     this.current += data;
     if (!this.fading) this.renderWord();
     this.updateProgress();
+    this.kickAutosave();
   }
 
   private handleKeydown(e: KeyboardEvent) {
@@ -1302,6 +1527,7 @@ export class StreamtypeView extends ItemView {
       this.current += e.key;
       if (!this.fading) this.renderWord();
       this.updateProgress();
+      this.kickAutosave();
     }
   }
 
