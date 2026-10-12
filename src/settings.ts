@@ -131,7 +131,7 @@ export class StreamtypeSettingTab extends PluginSettingTab {
           t
             .setValue(this.plugin.settings[key] as string)
             .onChange(async (v) => {
-              (this.plugin.settings as Record<string, unknown>)[key] = v;
+              (this.plugin.settings as unknown as Record<string, unknown>)[key] = v;
               await this.plugin.saveSettings();
             })
         );

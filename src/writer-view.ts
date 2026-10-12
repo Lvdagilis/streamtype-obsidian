@@ -3,10 +3,19 @@ import type StreamtypePlugin from "../main";
 import type { WritingMode, FontSize, DisplayMode, JournalTemplate } from "./settings";
 import {
   ensureFolder, appendToFile, createFile, fileExists,
-  buildFrontmatter, todayString, countWordsInMarkdown,
+  todayString, countWordsInMarkdown,
   getFolderFiles,
 } from "./vault-helpers";
 import { renderSectionPrompt } from "./templates";
+import {
+  escapeHtml, renderInlineMarkdown, renderMarkdown as renderMarkdownBlocks,
+  wrapInline, sentenceContext, countWords, recoverLastWord, refillAndConsume,
+  type BucketState,
+} from "./text-engine";
+import {
+  buildJournalBody, buildJournalArtifacts, buildStream,
+  buildMorningPagesNew, buildMorningPagesAppend, buildBookNew, buildBookAppend,
+} from "./session-builder";
 
 export const WRITER_VIEW_TYPE = "streamtype-view";
 
@@ -639,19 +648,16 @@ export class StreamtypeView extends ItemView {
   // is empty (commit should be deferred). Refills the bucket based on elapsed
   // time and the configured words-per-minute rate before checking.
   private consumeToken(): boolean {
-    const now = Date.now();
-    const elapsed = (now - this.lastTokenRefill) / 1000; // seconds since last check
-    const refillRate = this.plugin.settings.morningPagesWordsPerMinute / 60; // tokens/second
-    const burst = this.plugin.settings.morningPagesBurstSize;
-
-    this.tokenBucket = Math.min(burst, this.tokenBucket + elapsed * refillRate);
-    this.lastTokenRefill = now;
-
-    if (this.tokenBucket >= 1) {
-      this.tokenBucket -= 1;
-      return true;
-    }
-    return false;
+    const state: BucketState = { tokens: this.tokenBucket, lastRefill: this.lastTokenRefill };
+    const step = refillAndConsume(
+      state,
+      this.plugin.settings.morningPagesWordsPerMinute,
+      this.plugin.settings.morningPagesBurstSize,
+      Date.now()
+    );
+    this.tokenBucket = step.state.tokens;
+    this.lastTokenRefill = step.state.lastRefill;
+    return step.allowed;
   }
 
   // Called on an interval while a commit is pending; fires the deferred commit
@@ -783,14 +789,10 @@ export class StreamtypeView extends ItemView {
     }
     if (this.fullText.length === 0) return;
 
-    // Recover last committed word
-    const stripped = this.fullText.replace(/\n$/, "").replace(/ $/, "");
-    const lastSpace = Math.max(stripped.lastIndexOf(" "), stripped.lastIndexOf("\n"));
-    const lastWord  = stripped.slice(lastSpace + 1);
-    this.fullText   = stripped.slice(0, lastSpace + 1);
-
-    // Strip markdown wrappers
-    this.current = lastWord.replace(/^\*{1,3}([\s\S]*?)\*{1,3}$/, "$1");
+    // Recover last committed word (markdown wrappers stripped)
+    const recovered = recoverLastWord(this.fullText);
+    this.fullText = recovered.fullText;
+    this.current  = recovered.current;
 
     this.renderSentenceContext();
     this.updateBlurBg();
@@ -799,10 +801,7 @@ export class StreamtypeView extends ItemView {
   }
 
   private wrapInline(word: string): string {
-    if (this.boldMode && this.italicMode) return `***${word}***`;
-    if (this.boldMode)   return `**${word}**`;
-    if (this.italicMode) return `*${word}*`;
-    return word;
+    return wrapInline(word, this.boldMode, this.italicMode);
   }
 
   // ── Render helpers ─────────────────────────────────────────────────
@@ -812,10 +811,7 @@ export class StreamtypeView extends ItemView {
   }
 
   private getSentenceContext(): string {
-    if (!this.fullText) return "";
-    const m = this.fullText.match(/[.!?\n](?=[^.!?\n]*$)/);
-    const start = m ? this.fullText.indexOf(m[0]) + 1 : 0;
-    return this.fullText.slice(start).replace(/^\*{1,3}|^\s+/, "").slice(0, 200);
+    return sentenceContext(this.fullText);
   }
 
   private renderSentenceContext() {
@@ -876,37 +872,15 @@ export class StreamtypeView extends ItemView {
   }
 
   private renderMarkdown(text: string): string {
-    const lines = text.split("\n");
-    const out: string[] = [];
-    let inPara = false;
-
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (trimmed === "") {
-        if (inPara) { out.push("</p>"); inPara = false; }
-        continue;
-      }
-      const h3 = trimmed.match(/^### (.+)/);  if (h3) { if (inPara) { out.push("</p>"); inPara = false; } out.push(`<h3>${this.inlineMd(h3[1])}</h3>`); continue; }
-      const h2 = trimmed.match(/^## (.+)/);   if (h2) { if (inPara) { out.push("</p>"); inPara = false; } out.push(`<h2>${this.inlineMd(h2[1])}</h2>`); continue; }
-      const h1 = trimmed.match(/^# (.+)/);    if (h1) { if (inPara) { out.push("</p>"); inPara = false; } out.push(`<h1>${this.inlineMd(h1[1])}</h1>`); continue; }
-
-      if (!inPara) { out.push("<p>"); inPara = true; }
-      else { out.push("<br>"); }
-      out.push(this.inlineMd(trimmed));
-    }
-    if (inPara) out.push("</p>");
-    return out.join("\n");
+    return renderMarkdownBlocks(text);
   }
 
   private inlineMd(s: string): string {
-    return s
-      .replace(/\*\*\*(.+?)\*\*\*/g, "<strong><em>$1</em></strong>")
-      .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
-      .replace(/\*(.+?)\*/g, "<em>$1</em>");
+    return renderInlineMarkdown(s);
   }
 
   private escHtml(s: string): string {
-    return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    return escapeHtml(s);
   }
 
   // ── Peek ──────────────────────────────────────────────────────────
@@ -990,8 +964,7 @@ export class StreamtypeView extends ItemView {
   }
 
   private wordCount(): number {
-    const text = (this.fullText + " " + this.current).trim();
-    return text === "" ? 0 : text.split(/\s+/).filter(Boolean).length;
+    return countWords(this.fullText + " " + this.current);
   }
 
   private checkGoalCompletion() {
@@ -1068,56 +1041,46 @@ export class StreamtypeView extends ItemView {
     const now = new Date();
     const today = todayString();
     const time = now.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
-    const timeSlug = time.replace(":", "-");
     const folder = this.plugin.settings.journalFolder;
 
     await ensureFolder(this.app, folder);
 
-    // Build body — section-based or freeform
-    let body: string;
-    let sessionTitle: string;
-    if (this.activeTemplate && this.sectionSessions.length > 0) {
-      sessionTitle = this.activeTemplate.name;
-      body = this.activeTemplate.sections
-        .map((s, i) => `## ${s.prompt}\n\n${this.sectionSessions[i] ?? ""}`)
-        .join("\n\n");
-    } else {
-      sessionTitle = "Journal";
-      body = this.fullText + this.current;
-    }
+    const { title, body } = buildJournalBody(
+      this.activeTemplate, this.sectionSessions, this.fullText + this.current
+    );
+    const art = buildJournalArtifacts({
+      createdIso: now.toISOString(), today, time, folder, title, body, tags,
+    });
 
     // Each session is its own note: YYYY-MM-DD HH-MM.md
-    const sessionName = `${today} ${timeSlug}`;
-    const sessionPath = normalizePath(`${folder}${sessionName}.md`);
-    const fm = buildFrontmatter({ created: now.toISOString(), type: "journal", tags });
-    await createFile(this.app, sessionPath, `${fm}# ${sessionTitle}\n\n*${today} · ${time}*\n\n${body}`);
+    await createFile(this.app, normalizePath(art.session.path), art.session.content);
 
     // Master daily index: YYYY-MM-DD.md  — links to every session
-    const masterPath = normalizePath(`${folder}${today}.md`);
+    const masterPath = normalizePath(art.indexPath);
     if (!fileExists(this.app, masterPath)) {
-      const masterFm = buildFrontmatter({ created: now.toISOString(), type: "journal-index" });
-      await createFile(this.app, masterPath, `${masterFm}# ${today}\n\n- [[${sessionName}]]\n`);
+      await createFile(this.app, masterPath, art.newIndexContent);
     } else {
-      await appendToFile(this.app, masterPath, `- [[${sessionName}]]\n`);
+      await appendToFile(this.app, masterPath, art.indexLink);
     }
 
-    new Notice(`Saved → ${sessionName}.md`);
+    new Notice(`Saved → ${art.session.path.split("/").pop()}`);
     this.resetWritingState();
     this.activeTemplate = null;
     this.sectionSessions = [];
   }
 
   private async saveStream(tags: string[]) {
-    const now = new Date();
-    const slug = now.toISOString().replace(/[:.]/g, "-").slice(0, 19);
     const folder = this.plugin.settings.streamFolder;
-    const path = `${folder}stream-${slug}.md`;
-
     await ensureFolder(this.app, folder);
 
-    const fm = buildFrontmatter({ created: now.toISOString(), tags });
-    await createFile(this.app, path, fm + this.fullText + this.current);
-    new Notice(`Saved to ${path}`);
+    const file = buildStream({
+      createdIso: new Date().toISOString(),
+      folder,
+      text: this.fullText + this.current,
+      tags,
+    });
+    await createFile(this.app, file.path, file.content);
+    new Notice(`Saved to ${file.path}`);
     this.resetWritingState();
   }
 
@@ -1130,11 +1093,12 @@ export class StreamtypeView extends ItemView {
 
     const body = this.fullText + this.current;
     if (!fileExists(this.app, path)) {
-      const fm = buildFrontmatter({ created: new Date().toISOString(), type: "morning-pages", tags: ["morning-pages"] });
-      await createFile(this.app, path, `${fm}# Morning Pages — ${today}\n\n${body}`);
+      await createFile(this.app, path, buildMorningPagesNew({
+        createdIso: new Date().toISOString(), today, body,
+      }));
     } else {
       const time = new Date().toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
-      await appendToFile(this.app, path, `\n\n---\n\n## ${time}\n\n${body}`);
+      await appendToFile(this.app, path, buildMorningPagesAppend({ time, body }));
     }
 
     new Notice("Morning pages saved.");
@@ -1155,10 +1119,9 @@ export class StreamtypeView extends ItemView {
 
     const body = this.fullText + this.current;
     if (!fileExists(this.app, path)) {
-      const fm = buildFrontmatter({ project: this.bookProject, chapter: chapter.replace(/\.md$/, "") });
-      await createFile(this.app, path, fm + body);
+      await createFile(this.app, path, buildBookNew({ project: this.bookProject, chapter, body }));
     } else {
-      await appendToFile(this.app, path, "\n\n" + body);
+      await appendToFile(this.app, path, buildBookAppend(body));
     }
 
     new Notice(`Saved to ${chapter}`);

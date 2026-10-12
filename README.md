@@ -117,7 +117,11 @@ cd streamtype-obsidian
 npm install
 npm run dev          # watch mode — rebuilds main.js on save
 npm run build        # production build
+npm test             # run the unit-test suite (Vitest)
+npm run typecheck    # static type check (tsc --noEmit)
 ```
+
+See [TESTING.md](TESTING.md) for the full test suite: automated tests, a step-by-step manual test script, and a release checklist.
 
 Symlink the plugin folder into your test vault:
 
